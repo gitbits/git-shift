@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# git-shift - shifts commit dates
+# git-shift - shifts dates of specified commits by a specified amount of time
 #
 # How to set up:
 #     $ install -m 755 git-shift ~/bin/
@@ -71,6 +71,8 @@ git-shift () {
 
     local revspec="$(printf '%s*\n' "$*" | sed -e 's: \{1,\}:*|:g')"
 
+    # SUSv4 only requires signed long precision in shell's arithmetic
+    # expansion, hence we use bc(1) to avoid the year 2038 problem.
     git filter-branch --force --env-filter '
         case "$GIT_COMMIT" in
             '"$revspec"')
