@@ -1,7 +1,7 @@
 git-shift
 =========
 
-Sinopsys
+Synopsis
 --------
 
 * git-shift - shifts dates of specified commits by a specified amount of time
