@@ -13,7 +13,7 @@ Assuming you are installing these scripts in ~/bin, run the following
 commands:
 
 	install -m 755 git-shift ~/bin/
-	git config --global alias.shift '!$HOME/bin/git-shift "$@"'
+	git config --global alias.shift '!$HOME/bin/git-shift'
 
 How to use
 ----------

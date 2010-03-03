@@ -4,7 +4,7 @@
 #
 # How to set up:
 #     $ install -m 755 git-shift ~/bin/
-#     $ git config --global alias.shift '!$HOME/bin/git-shift "$@"'
+#     $ git config --global alias.shift '!$HOME/bin/git-shift'
 #
 # How to use:
 #     $ git shift <offset> <commit_id> [<commit_id> ...]
