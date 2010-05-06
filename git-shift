@@ -44,7 +44,7 @@
 # SUCH DAMAGE.
 #
 
-git-shift () {
+git_shift () {
     local offset="${1:-0}"; shift
 
     if [ $# -eq 0 ]; then
@@ -99,4 +99,4 @@ check_revs () {
     return $ret
 }
 
-git-shift "$@"
+git_shift "$@"
