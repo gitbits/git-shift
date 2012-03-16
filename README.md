@@ -4,7 +4,7 @@ git-shift
 Synopsis
 --------
 
-* git-shift - shifts dates of specified commits by a specified amount of time
+* git-shift - shifts timestamps of commits after the fact
 
 How to set up
 -------------
@@ -15,18 +15,30 @@ you are done.
 How to use
 ----------
 
-        git shift <offset> <commit_id> [<commit_id> ...]
+        usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list>...
 
-        Time offset format can be described in this extended regexp:
+            -v, --verbose         be verbose
+            -n, --dry-run         dry run
+            -k                    skip errors
 
-            /^[-+]?(([0-9]+[wdhm])+|[0-9]+)$/
+            <time>                substitute this value for the time part(s) of
+                                  current commit time(s)
+                                  one of:
+                                    - "HH:MM:SS"
+                                    - "HH:MM" (= "HH:MM:00")
 
-        Some example values:
+            <timediff>            add this time span to current commit time(s)
+                                  in regexp: /^[-+]([0-9]+[wdhms])+$/
+                                  e.g.
+                                    +1d -12h 30m -1h30m -600s
 
-            +1d -12h 30m -1h30m 60 (omission of unit implies seconds)
+            <timezone>            in regexp: /^[-+][01][0-9][0-5][0-9]$/
 
-        Each commit ID is a 40-byte hexadecimal commit object name, or
-        a partial prefix matching a single commit.
+            <datetime>            set this date time as commit time(s)
+                                  one of:
+                                    - ISO-8601 date time string
+                                    - date(1) format in C locale
+                                    - number of seconds since the Unix epoch
 
 Author
 ------

@@ -1,22 +1,6 @@
-#!/bin/sh
+#!/usr/bin/perl
 #
-# git-shift - shifts dates of specified commits by a specified amount of time
-#
-# How to set up:
-#     $ install -m 755 git-shift ~/bin/
-#     $ git config --global alias.shift '!$HOME/bin/git-shift'
-#
-# How to use:
-#     $ git shift <offset> <commit_id> [<commit_id> ...]
-#
-#     Time offset format can be described in this extended regexp:
-#         /^[-+]?(([0-9]+[wdhm])+|[0-9]+)$/
-#     Some example values:
-#         +1d -12h 30m -1h30m 60 (omission of unit implies seconds)
-#
-#     Each commit ID is a 40-byte hexadecimal commit object name, or a
-#     partial prefix matching a single commit.
-#
+# git-shift - shifts timestamps of commits after the fact
 #
 # Copyright (c) 2010, 2012 Akinori MUSHA
 #
@@ -44,59 +28,327 @@
 # SUCH DAMAGE.
 #
 
-git_shift () {
-    local offset="${1:-0}"; shift
+use strict;
+use warnings;
+use Getopt::Long;
+use IO::Select;
+use IPC::Open3;
+use POSIX qw(tzset tzname);
+use Symbol 'gensym';
+use Time::Local;
+use Time::Piece 1.16;	# timezone support is required
+use Time::Seconds;
 
-    if [ $# -eq 0 ]; then
-        echo "$0: no revision specified" >&2
-        return 64
-    fi
+my($opt_v, $opt_n, $opt_k);
+my $exit_status = 0;
 
-    local seconds="${offset#+}"
-    case "$seconds" in
-        *[wdhms]*) 
-            seconds="$(printf '%s\n' "$seconds" | \
-                sed -e 's:\(\([0-9]\{1,\}[wdhms]\)\{1,\}\):(\1):g' -e 's:\([wdhms]\)\([0-9]\):\1+\2:g' \
-                    -e 's:w:*7d:g' -e 's:d:*24h:g' -e 's:h:*60m:g' -e 's:m:*60s:g' -e 's:s::g')"
-            ;;
-    esac
-    seconds="$(printf '%s\n' "$seconds" | bc 2>/dev/null || echo)"
+sub usage {
+    print STDERR <<'EOS';
+usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list>...
 
-    if [ -z "$seconds" ]; then
-        echo "$0: syntax error: $offset" >&2
-        return 1
-    fi
+    -v, --verbose         be verbose
+    -n, --dry-run         dry run
+    -k                    skip errors
 
-    check_revs "$@" || return 1
+    <timediff>            add this time span to current commit time(s)
+                          in regexp: /^[-+]([0-9]+[wdhms])+$/
+                          e.g.
+                            +1d -12h 30m -1h30m -600s
 
-    local revspec="$(printf '%s*\n' "$*" | sed -e 's: \{1,\}:*|:g')"
+    <time>                substitute this value for the time part(s) of
+                          current commit time(s)
+                          one of:
+                            - "HH:MM:SS"
+                            - "HH:MM" (= "HH:MM:00")
 
+    <timezone>            specify the time zone offset
+                          in regexp: /^[-+][01][0-9][0-5][0-9]$/
+
+    <datetime>            set this date time as commit time(s)
+                          one of:
+                            - ISO-8601 date time string
+                            - date(1) format in C locale
+                            - number of seconds since the Unix epoch
+EOS
+    exit 129;
+}
+
+sub main {
+    Getopt::Long::Configure qw(no_getopt_compat require_order pass_through);
+    GetOptions("v|verbose" => \$opt_v,
+               "n|dry-run" => \$opt_n,
+               "k"         => \$opt_k) or exit 64;
+    pop @ARGV if @ARGV && $ARGV[$#ARGV] eq '--';
+    $opt_v = 1  if $opt_n;
+
+    if (!@ARGV) {
+        usage();
+    }
+
+    my($timespec, @revspec) = @ARGV;
+    my $function = parse_timespec($timespec);
+
+    if (!defined($function)) {
+        print STDERR "$0: error in time spec.\n";
+        usage();
+    }
+
+    git_shift($function, @revspec);
+
+    exit $exit_status;
+}
+
+sub may_exit {
+    my($status) = @_ ? @_ : ($?);
+    exit $status unless $opt_k;
+    $exit_status = $status;
+}
+
+sub git_shift {
+    my($function, @revspec) = @_;
+    my $filter_main = compose_filter_main($function);
+    chomp $filter_main;
+
+    my @commits = revspec_to_commits(@revspec);
+
+    if (!@commits) {
+        print STDERR "$0: no revision specified\n";
+        exit 64;
+    }
+
+    my @flags = qw(--force);
+
+    for my $commit (@commits) {
+        my $filter = <<"EOS";
+[ \$GIT_COMMIT != $commit ] || {
+$filter_main
+}
+EOS
+        print "commit $commit\n";
+
+        my $git = open3(my $in, my $out, my $err = gensym,
+                        'git', 'filter-branch', @flags,
+                        '--env-filter', $filter) or die $!;
+        while (my $line = <$err>) {
+            if ($line =~ /^git-shift /) {
+                chomp $line;
+                my($dummy, @pairs) = split(' ', $line);
+                my @tuples;
+                while (my($time, $tz) = splice(@pairs, 0, 2)) {
+                    push @tuples, stringify_git_time($time, $tz);
+                }
+                my($atimestr, $ctimestr, $ntimestr) = @tuples;
+                print "AuthorDate: $atimestr\n";
+                print "CommitDate: $ctimestr\n";
+                print "         => $ntimestr\n";
+            } elsif ($line =~ /^WARNING: .* unchanged$/) {
+                print $line unless $opt_n;
+            } else {
+                print $line;
+            }
+        }
+        waitpid $git, 0;
+        may_exit if $?;
+    }
+}
+
+sub revspec_to_commits {
+    my(@revspec) = @_;
+
+    my @revs = do {
+        my $git = open3(my $in, my $out, '>&2',
+                        'git', 'rev-parse', @revspec) or die $!;
+        my @out = <$out>;
+        waitpid $git, 0;
+        if ($?) {
+            exit $?;
+        }
+        chomp(@out);
+        @out;
+    };
+    if (grep(/[^0-9a-f]/, @revs)) {
+        @revs = do {
+            my $git = open3(my $in, my $out, '>&2',
+                            'git', 'rev-list', @revs) or die $!;
+            my @out = <$out>;
+            waitpid $git, 0;
+            if ($?) {
+                exit $?;
+            }
+            chomp(@out);
+            @out;
+        };
+    }
+
+    @revs;
+}
+
+sub sh_functions {
     # SUSv4 only requires signed long precision in shell's arithmetic
-    # expansion, hence we use bc(1) to avoid the year 2038 problem.
-    git filter-branch --force --env-filter '
-        case "$GIT_COMMIT" in
-            '"$revspec"')
-                set -- $GIT_AUTHOR_DATE
-                time="$1"; tz="$2"
-                newtime="$(echo "$time + ('"$seconds"')" | bc)"
-                GIT_AUTHOR_DATE="$newtime $tz"
-                GIT_COMMITTER_DATE="$newtime $tz"
-                ;;
-         esac'
+    # expansion, hence bc(1) to avoid the year 2038 problem.
+    <<'EOS';
+st () {
+ time="$1"; tz="$2"; func="$3"
+ d='[0-9]'
+ sign=`expr -- $tz : "\([-+]\)"`
+ hh=`expr -- $tz : "[-+]\($d$d\)"`
+ mm=`expr -- $tz : "[-+]$d$d\($d$d\)"`
+ tzo="$(( $sign(60*(60*${hh#0}+${mm#0})) ))"
+ set -- $(echo "define f(s, o) { $func; s; o } f($time, $tzo)" | bc)
+ ntime="$1"; ntzo="$2"
+ case "$ntzo" in (-*) sign=- ;; (*) sign=+ ;; esac
+ s="${ntzo#-}"
+ ntz="$(printf '%s%02d%02d' "$sign" $((s/3600)) $((s%3600/60)))"
+ echo "$ntime $ntz"
+}
+EOS
 }
 
-check_revs () {
-    local rev ret=
+sub compose_filter_main {
+    my($function) = @_;
 
-    for rev; do
-        if ! git --no-pager show "$rev" >/dev/null 2>&1; then
-            echo "$0: nonexistent or ambiguous object name: $rev" >&2
-            ret=1
-            continue
-        fi
-    done
+    my $filter = sh_functions();
 
-    return $ret
+    $filter .= <<"EOS";
+set -- \$GIT_AUTHOR_DATE \$GIT_COMMITTER_DATE
+set -- "\$@" `st \$1 \$2 '$function'`
+echo git-shift "\$@" >&2
+EOS
+
+    unless ($opt_n) {
+        $filter .= <<'EOS';
+GIT_AUTHOR_DATE="$5 $6"
+GIT_COMMITTER_DATE="$5 $6"
+EOS
+    }
+
+    $filter;
 }
 
-git_shift "$@"
+my $re_epoch	= qr/(?:0|[1-9][0-9]*)/;
+my $re_tz	= qr/[-+][01][0-9][0-5][0-9]/;
+my $re_span	= qr/[-+](?:[0-9]+[wdhm])+/;
+
+sub parse_timespec {
+    my($timespec) = @_;
+    if ($timespec =~ /\A($re_epoch)($re_tz)?\z/o) {
+        my($epoch, $tz) = ($1, $2);
+        return join(
+            ';',
+            sprintf('s=%d', $epoch),
+            defined($tz) ? sprintf('o=%d', parse_tz($tz)) : (),
+        );
+    } elsif ($timespec =~ /\A(?=.)(([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?)?($re_span)?($re_tz)?\z/o) {
+        my($hms, $h, $m, $s, $span, $tz) = ($1, $2, $3, $4, $5, $6);
+        my $seconds;
+        return join(
+            ';',
+            defined($span) && defined($seconds = parse_timediff($span)) ?
+                sprintf('s+=%d', $seconds) : (),
+            defined($hms) ? (
+                's+=o',
+                sprintf('s-=s%%%d', ONE_DAY),
+                sprintf('s+=%d', $h * ONE_HOUR + $m * ONE_MINUTE + ($s || 0)),
+                's-=o',
+            ) : (),
+            defined($tz) ? sprintf('o=%d', parse_tz($tz)) : (),
+        );
+    } else {
+        my($time, $tzoffset) = eval {
+            parse_date($timespec);
+        };
+        return sprintf('s=%d;o=%d', $time->epoch, $tzoffset) unless $@;
+    }
+
+    return undef;
+}
+
+sub parse_date {
+    my($datetime) = @_;
+    my($time, $tzoffset);
+
+    if ($datetime =~ /\A([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(Z|[-+][0-9]{4})?\z/){
+        my($date, $tzsuffix) = ($1, $2);
+        eval {
+            if (!defined($tzsuffix)) {
+                $time = localtime(Time::Piece->strptime($date, '%Y-%m-%dT%T'));
+                $tzoffset = $time->tzoffset;
+            } elsif ($tzsuffix eq 'Z') {
+                $time = Time::Piece->strptime($date, '%Y-%m-%dT%T');
+                $tzoffset = 0;
+            } else {
+                $time = Time::Piece->strptime($datetime, '%Y-%m-%dT%T%z');
+                $tzoffset = parse_tz($tzsuffix);
+            }
+        };
+        return ($time, $tzoffset) unless $@;
+    };
+
+    if ($datetime =~ /\A([A-Z][a-z]+\s+[A-Z][a-z]+\s+[0-9]{1,2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s+(?:UTC|GMT|([A-Z]+))\s+([0-9]+)\z/) {
+        my($date, $tzname, $year) = ($1, $2, $3);
+        eval {
+            my @localtzname = grep { !/\A(UTC|GMT|WILDABBR)\z/ } do {
+                POSIX::tzset();
+                POSIX::tzname();
+            };
+            $time = Time::Piece->strptime("$date $year", '%a %b %d %T %Y');
+            if (defined($tzname)) {
+                grep { $_ eq $tzname } @localtzname or die 'unrecognized time zone name';
+                $time = localtime(
+                    timelocal($time->sec, $time->min, $time->hour,
+                              $time->mday, $time->_mon, $time->year)
+                );
+                $tzoffset = $time->tzoffset;
+            } else {
+                $tzoffset = 0;
+            }
+        };
+    }
+    return ($time, $tzoffset) unless $@;
+
+    die 'unrecognized date format';
+}
+
+
+sub parse_timediff {
+    my($spec) = @_;
+    my $value = 0;
+    my $sign = ($spec =~ s/\A([-+])//) && $1;
+    until ($spec eq '') {
+        if ($spec =~ s/\A([0-9]+)([wdhm]?)//) {
+            my $seconds = $1 * (
+                $2 eq 'w' ? ONE_WEEK :
+                $2 eq 'd' ? ONE_DAY :
+                $2 eq 'm' ? ONE_MINUTE :
+                $2 eq 'h' ? ONE_HOUR :
+                1
+            );
+            if ($sign eq '-') {
+                $value -= $seconds;
+            } else {
+                $value += $seconds;
+            }
+        } else {
+            return undef;
+        }
+    }
+    $value;
+}
+
+sub parse_tz {
+    my($tz) = @_;
+    my $t = gmtime();
+    my $u = Time::Piece->strptime(
+        $t->strftime("%Y-%m-%dT%H:%M:%S$tz"),
+        '%Y-%m-%dT%H:%M:%S%z'
+    );
+    $t - $u;
+}
+
+sub stringify_git_time {
+    my($time, $tz) = @_;
+    my $t = gmtime($time) + parse_tz($tz);
+    $t->strftime("%a %b %d %T %Y") . " $tz";
+}
+
+main();
