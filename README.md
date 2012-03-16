@@ -6,11 +6,14 @@ Synopsis
 
 * git-shift - shifts timestamps of commits after the fact
 
-How to set up
--------------
+Requirements
+------------
 
-Just place this script in one of the directories in your `PATH`, and
-you are done.
+- Perl >= 5.8
+
+- Time::Piece >= 1.16
+
+    Only Perl >= 5.14 comes with a reasonably new version.
 
 How to use
 ----------
