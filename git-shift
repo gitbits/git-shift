@@ -315,12 +315,12 @@ sub parse_timediff {
     my $value = 0;
     my $sign = ($spec =~ s/\A([-+])//) && $1;
     until ($spec eq '') {
-        if ($spec =~ s/\A([0-9]+)([wdhm]?)//) {
+        if ($spec =~ s/\A([0-9]+)([wdhm])//) {
             my $seconds = $1 * (
                 $2 eq 'w' ? ONE_WEEK :
                 $2 eq 'd' ? ONE_DAY :
-                $2 eq 'm' ? ONE_MINUTE :
                 $2 eq 'h' ? ONE_HOUR :
+                $2 eq 'm' ? ONE_MINUTE :
                 1
             );
             if ($sign eq '-') {
