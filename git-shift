@@ -193,7 +193,9 @@ st () {
  sign=`expr -- $tz : "\([-+]\)"`
  hh=`expr -- $tz : "[-+]\($d$d\)"`
  mm=`expr -- $tz : "[-+]$d$d\($d$d\)"`
- tzo="$(( $sign(60*(60*${hh#0}+${mm#0})) ))"
+ [ "$hh" = 0 ] || hh=${hh#0}
+ [ "$mm" = 0 ] || mm=${mm#0}
+ tzo="$(( $sign(60*(60*$hh+$mm)) ))"
  set -- $(echo "define f(s, o) { $func; s; o } f($time, $tzo)" | bc)
  ntime="$1"; ntzo="$2"
  case "$ntzo" in (-*) sign=- ;; (*) sign=+ ;; esac
@@ -202,6 +204,8 @@ st () {
  echo "$ntime $ntz"
 }
 EOS
+    # hh and mm above must always be two digit strings, but on OS X a
+    # leading zero is eaten by a buggy expr(1) hence `[ .. = 0 ] ||`.
 }
 
 sub compose_filter_main {
