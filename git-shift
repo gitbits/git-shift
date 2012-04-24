@@ -196,7 +196,14 @@ st () {
  [ "$hh" = 0 ] || hh=${hh#0}
  [ "$mm" = 0 ] || mm=${mm#0}
  tzo="$(( $sign(60*(60*$hh+$mm)) ))"
- set -- $(echo "define f(s, o) { $func; s; o } f($time, $tzo)" | bc)
+ set -- $(bc <<EOF
+define f(s,o) {
+ $func
+ s; o
+}
+f($time,$tzo)
+EOF
+ )
  ntime="$1"; ntzo="$2"
  case "$ntzo" in (-*) sign=- ;; (*) sign=+ ;; esac
  s="${ntzo#-}"
