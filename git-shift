@@ -314,8 +314,8 @@ sub parse_date {
                 $tzoffset = 0;
             }
         };
+        return ($time, $tzoffset) unless $@;
     }
-    return ($time, $tzoffset) unless $@;
 
     die 'unrecognized date format';
 }
