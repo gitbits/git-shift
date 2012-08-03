@@ -221,7 +221,7 @@ sub compose_filter_main {
     my $filter = sh_functions();
 
     $filter .= <<"EOS";
-set -- \$GIT_AUTHOR_DATE \$GIT_COMMITTER_DATE
+set -- \${GIT_AUTHOR_DATE#@} \${GIT_COMMITTER_DATE#@}
 set -- "\$@" `st \$1 \$2 '$function'`
 echo git-shift "\$@" >&2
 EOS
