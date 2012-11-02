@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 #
 # git-shift - shifts timestamps of commits after the fact
 #
