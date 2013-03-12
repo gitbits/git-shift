@@ -99,7 +99,7 @@ sub main {
 }
 
 sub may_exit {
-    my($status) = @_ ? @_ : ($?);
+    my($status) = @_ ? @_ : ($? >> 8);
     exit $status unless $opt_k;
     $exit_status = $status;
 }
@@ -161,7 +161,7 @@ sub revspec_to_commits {
         my @out = <$out>;
         waitpid $git, 0;
         if ($?) {
-            exit $?;
+            exit($? >> 8);
         }
         chomp(@out);
         @out;
@@ -173,7 +173,7 @@ sub revspec_to_commits {
             my @out = <$out>;
             waitpid $git, 0;
             if ($?) {
-                exit $?;
+                exit($? >> 8);
             }
             chomp(@out);
             @out;
