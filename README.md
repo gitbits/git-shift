@@ -43,6 +43,11 @@ How to use
                                     - date(1) format in C locale
                                     - number of seconds since the Unix epoch
 
+            <rev-list>            speficy commits to modify which must be on the
+                                  current branch; a single commit <committish> or
+                                  a range of commits <committish1>..<committish2>
+                                  (*both inclusive*)
+
 Author
 ------
 

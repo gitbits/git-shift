@@ -69,6 +69,11 @@ usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list
                             - ISO-8601 date time string
                             - date(1) format in C locale
                             - number of seconds since the Unix epoch
+
+    <rev-list>            speficy commits to modify which must be on the
+                          current branch; a single commit <committish> or
+                          a range of commits <committish1>..<committish2>
+                          (*both inclusive*)
 EOS
     exit 129;
 }
@@ -153,32 +158,62 @@ EOS
     }
 }
 
+sub git_revlist {
+    my $git = open3(my $in, my $out, '>&2',
+                    'git', 'rev-list', @_) or die $!;
+    my @out = <$out>;
+    waitpid $git, 0;
+    exit($? >> 8) if $?;
+    chomp(@out);
+    @out;
+}
+
+sub expand_revspec {
+    my($revspec) = @_;
+    @_ == 1 or die;
+
+    if ($revspec =~ /\.\.\./) {
+        print STDERR "$0: `...' is not supported.\n";
+        exit 64;
+    }
+    if ($revspec =~ /\.\./) {
+        my($from_spec, $to_spec) = split(/\.\./, $revspec, 2);
+        if ($to_spec eq '') {
+            $to_spec = 'HEAD';
+        }
+        return git_revlist($from_spec eq '' ?
+                               $to_spec :
+                                   sprintf('%s^..%s', $from_spec, $to_spec));
+    }
+
+    my $git = open3(my $in, my $out, '>&2',
+                    'git', 'rev-parse', $revspec) or die $!;
+    my($rev, @rest) = <$out>;
+    waitpid $git, 0;
+    exit($? >> 8) if $?;
+    if (@rest || $rev !~ /^[0-9a-f]{40}$/) {
+        print STDERR "$0: $revspec does not specify a valid commit.\n";
+        exit 64;
+    }
+    chomp($rev);
+    ($rev);
+}
+
 sub revspec_to_commits {
     my(@revspec) = @_;
 
-    my @revs = do {
-        my $git = open3(my $in, my $out, '>&2',
-                        'git', 'rev-parse', @revspec) or die $!;
-        my @out = <$out>;
-        waitpid $git, 0;
-        if ($?) {
-            exit($? >> 8);
-        }
-        chomp(@out);
-        @out;
-    };
-    if (grep(/[^0-9a-f]/, @revs)) {
-        @revs = do {
-            my $git = open3(my $in, my $out, '>&2',
-                            'git', 'rev-list', @revs) or die $!;
-            my @out = <$out>;
-            waitpid $git, 0;
-            if ($?) {
-                exit($? >> 8);
-            }
-            chomp(@out);
-            @out;
-        };
+    my %revs = map { ($_ => 1) } map { expand_revspec($_) } @revspec;
+
+    chomp(my @all = `git rev-list HEAD`);
+
+    my @revs = map {
+        my $rev = $all[$_];
+        delete($revs{$rev}) ? $rev : ();
+    } (0..$#all);
+
+    if (%revs) {
+        print STDERR "$0: can only modify commits on the current branch.\n";
+        exit 1;
     }
 
     @revs;
