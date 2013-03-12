@@ -149,6 +149,7 @@ EOS
         }
         waitpid $git, 0;
         may_exit if $?;
+        system 'git', 'rebase', "$commit^";
     }
 }
 
