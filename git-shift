@@ -75,12 +75,12 @@ usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list
                           a range of commits <committish1>..<committish2>
                           (*both inclusive*)
 EOS
-    exit 129;
 }
 
 sub main {
     Getopt::Long::Configure qw(no_getopt_compat require_order pass_through);
-    GetOptions("v|verbose" => \$opt_v,
+    GetOptions("h|help"    => sub { usage(); exit },
+               "v|verbose" => \$opt_v,
                "n|dry-run" => \$opt_n,
                "k"         => \$opt_k) or exit 64;
     pop @ARGV if @ARGV && $ARGV[$#ARGV] eq '--';
@@ -88,6 +88,7 @@ sub main {
 
     if (!@ARGV) {
         usage();
+        exit 129;
     }
 
     my($timespec, @revspec) = @ARGV;
@@ -96,6 +97,7 @@ sub main {
     if (!defined($function)) {
         print STDERR "$0: error in time spec.\n";
         usage();
+        exit 129;
     }
 
     git_shift($function, @revspec);
