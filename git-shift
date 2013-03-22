@@ -113,50 +113,79 @@ sub may_exit {
 
 sub git_shift {
     my($function, @revspec) = @_;
-    my $filter_main = compose_filter_main($function);
-    chomp $filter_main;
 
-    my @commits = revspec_to_commits(@revspec);
+    if (`git diff --shortstat` =~ /\w/) {
+        print STDERR "$0: work directory is not clean.\n";
+        exit 1;
+    }
+    if (`git diff --shortstat --cached` =~ /\w/) {
+        print STDERR "$0: index is not clean.\n";
+        exit 1;
+    }
 
-    if (!@commits) {
+    my %revs = map { ($_ => 0) } map { expand_revspec($_) } @revspec;
+
+    if (!%revs) {
         print STDERR "$0: no revision specified\n";
         exit 64;
     }
 
-    my @flags = qw(--force);
+    my(%rev_info, @all_revs, $start, $found);
 
-    for my $commit (@commits) {
-        my $filter = <<"EOS";
-[ \$GIT_COMMIT != $commit ] || {
-$filter_main
-}
-EOS
-        print "commit $commit\n";
-
-        my $git = open3(my $in, my $out, my $err = gensym,
-                        'git', 'filter-branch', @flags,
-                        '--env-filter', $filter) or die $!;
-        while (my $line = <$err>) {
-            if ($line =~ /^git-shift /) {
-                chomp $line;
-                my($dummy, @pairs) = split(' ', $line);
-                my @tuples;
-                while (my($time, $tz) = splice(@pairs, 0, 2)) {
-                    push @tuples, stringify_git_time($time, $tz);
+    my $git = open3(my $in, my $out, '>&2',
+                    'git', 'log', '--reverse',
+                    '--date=raw', '--pretty=format:%H %ad %cd') or die $!;
+    for my $line (<$out>) {
+        my($rev, @rev_info) = split(' ', $line);
+        if (exists($revs{$rev})) {
+            $revs{$rev}++;
+            $found ||= do {
+                if (!$start) {
+                    print STDERR "$0: cannot modify the root commit.\n";
+                    exit 1;
                 }
-                my($atimestr, $ctimestr, $ntimestr) = @tuples;
-                print "AuthorDate: $atimestr\n";
-                print "CommitDate: $ctimestr\n";
-                print "         => $ntimestr\n";
-            } elsif ($line =~ /^WARNING: .* unchanged$/) {
-                print $line unless $opt_n;
-            } else {
-                print $line;
-            }
+                1;
+            };
         }
-        waitpid $git, 0;
-        may_exit if $?;
-        system 'git', 'rebase', "$commit^";
+        if ($found) {
+            push @all_revs, $rev;
+            $rev_info{$rev} = \@rev_info;
+        } else {
+            $start = $rev
+        }
+    }
+    waitpid $git, 0;
+    exit($? >> 8) if $?;
+
+    for my $rev (keys(%revs)) {
+        if (!$revs{$rev}) {
+            print STDERR "$0: can only modify commits on the current branch.\n";
+            exit 1;
+        }
+    }
+
+    unless ($opt_n) {
+        system 'git', 'reset', '--hard', $start;
+        exit($? >> 8) if $?;
+    }
+
+    for my $rev (@all_revs) {
+        my($atime, $atz, $ctime, $ctz) = @{$rev_info{$rev}};
+        if (exists($revs{$rev})) {
+            my($ntime, $ntz) = $function->($atime, $atz);
+
+            my($atimestr, $ctimestr, $ntimestr) = map {
+                stringify_git_time(@$_);
+            } ([$atime, $atz], [$ctime, $ctz], [$ntime, $ntz]);
+
+            print "AuthorDate: $atimestr\n";
+            print "CommitDate: $ctimestr\n";
+            print "         => $ntimestr\n";
+
+            git_cherry_pick($rev, $ntime, $ntz, $ntime, $ntz);
+        } else {
+            git_cherry_pick($rev, $atime, $atz, $ctime, $ctz);
+        }
     }
 }
 
@@ -170,8 +199,22 @@ sub git_revlist {
     @out;
 }
 
+sub git_cherry_pick {
+    my($rev, $atime, $atz, $ctime, $ctz) = @_;
+
+    return if $opt_n;
+
+    system "git cherry-pick $rev >/dev/null";
+    exit($? >> 8) if $?;
+
+    local $ENV{GIT_COMMITTER_DATE} = "$ctime $ctz";
+    system 'git', 'commit', '--amend',
+        "--date=$atime $atz", '-C', $rev;
+    exit($? >> 8) if $?;
+}
+
 sub expand_revspec {
-    my($revspec) = @_;
+    my($revspec, $branch) = @_;
     @_ == 1 or die;
 
     if ($revspec =~ /\.\.\./) {
@@ -201,79 +244,6 @@ sub expand_revspec {
     ($rev);
 }
 
-sub revspec_to_commits {
-    my(@revspec) = @_;
-
-    my %revs = map { ($_ => 1) } map { expand_revspec($_) } @revspec;
-
-    chomp(my @all = `git rev-list HEAD`);
-
-    my @revs = map {
-        my $rev = $all[$_];
-        delete($revs{$rev}) ? $rev : ();
-    } (0..$#all);
-
-    if (%revs) {
-        print STDERR "$0: can only modify commits on the current branch.\n";
-        exit 1;
-    }
-
-    @revs;
-}
-
-sub sh_functions {
-    # SUSv4 only requires signed long precision in shell's arithmetic
-    # expansion, hence bc(1) to avoid the year 2038 problem.
-    <<'EOS';
-st () {
- time="$1"; tz="$2"; func="$3"
- d='[0-9]'
- sign=`expr -- $tz : "\([-+]\)"`
- hh=`expr -- $tz : "[-+]\($d$d\)"`
- mm=`expr -- $tz : "[-+]$d$d\($d$d\)"`
- [ "$hh" = 0 ] || hh=${hh#0}
- [ "$mm" = 0 ] || mm=${mm#0}
- tzo="$(( $sign(60*(60*$hh+$mm)) ))"
- set -- $(bc <<EOF
-define f(s,o) {
- $func
- s; o
-}
-f($time,$tzo)
-EOF
- )
- ntime="$1"; ntzo="$2"
- case "$ntzo" in (-*) sign=- ;; (*) sign=+ ;; esac
- s="${ntzo#-}"
- ntz="$(printf '%s%02d%02d' "$sign" $((s/3600)) $((s%3600/60)))"
- echo "$ntime $ntz"
-}
-EOS
-    # hh and mm above must always be two digit strings, but on OS X a
-    # leading zero is eaten by a buggy expr(1) hence `[ .. = 0 ] ||`.
-}
-
-sub compose_filter_main {
-    my($function) = @_;
-
-    my $filter = sh_functions();
-
-    $filter .= <<"EOS";
-set -- \${GIT_AUTHOR_DATE#@} \${GIT_COMMITTER_DATE#@}
-set -- "\$@" `st \$1 \$2 '$function'`
-echo git-shift "\$@" >&2
-EOS
-
-    unless ($opt_n) {
-        $filter .= <<'EOS';
-GIT_AUTHOR_DATE="$5 $6"
-GIT_COMMITTER_DATE="$5 $6"
-EOS
-    }
-
-    $filter;
-}
-
 my $re_epoch	= qr/(?:0|[1-9][0-9]*)/;
 my $re_tz	= qr/[-+][01][0-9][0-5][0-9]/;
 my $re_span	= qr/[-+](?:[0-9]+[wdhms])+/;
@@ -281,32 +251,31 @@ my $re_span	= qr/[-+](?:[0-9]+[wdhms])+/;
 sub parse_timespec {
     my($timespec) = @_;
     if ($timespec =~ /\A($re_epoch)($re_tz)?\z/o) {
-        my($epoch, $tz) = ($1, $2);
-        return join(
-            ';',
-            sprintf('s=%d', $epoch),
-            defined($tz) ? sprintf('o=%d', parse_tz($tz)) : (),
-        );
+        my($ntime, $ntz) = ($1, $2);
+        return sub {
+            my($otime, $otz) = @_;
+            ($ntime, defined($ntz) ? $ntz : $otz);
+        };
     } elsif ($timespec =~ /\A(?=.)(([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?)?($re_span)?($re_tz)?\z/o) {
-        my($hms, $h, $m, $s, $span, $tz) = ($1, $2, $3, $4, $5, $6);
-        my $seconds;
-        return join(
-            ';',
-            defined($span) && defined($seconds = parse_timediff($span)) ?
-                sprintf('s+=%d', $seconds) : (),
-            defined($hms) ? (
-                's+=o',
-                sprintf('s-=s%%%d', ONE_DAY),
-                sprintf('s+=%d', $h * ONE_HOUR + $m * ONE_MINUTE + ($s || 0)),
-                's-=o',
-            ) : (),
-            defined($tz) ? sprintf('o=%d', parse_tz($tz)) : (),
-        );
+        my($hhmmss, $hh, $mm, $ss, $span, $ntz) = ($1, $2, $3, $4, $5, $6);
+        return sub {
+            my($otime, $otz) = @_;
+            if (defined($span) && defined(my $seconds = parse_timediff($span))) {
+                $otime += $seconds;
+            }
+            if (defined($hhmmss)) {
+                $otime -= ($otime + parse_tz($otz)) % ONE_DAY;
+                $otime += $hh * ONE_HOUR + $mm * ONE_MINUTE + ($ss || 0);
+            }
+            ($otime, defined($ntz) ? $ntz : $otz);
+        };
     } else {
         my($time, $tzoffset) = eval {
             parse_date($timespec);
         };
-        return sprintf('s=%d;o=%d', $time->epoch, $tzoffset) unless $@;
+        return sub {
+            ($time->epoch, stringify_tzoffset($tzoffset));
+        } unless $@;
     }
 
     return undef;
@@ -392,6 +361,13 @@ sub parse_tz {
         '%Y-%m-%dT%H:%M:%S%z'
     );
     $t - $u;
+}
+
+sub stringify_tzoffset {
+    my($tzo) = @_;
+    my $min = $tzo % ONE_HOUR;
+    my $hour = ($tzo - $min) / ONE_HOUR;
+    sprintf('%+03d%02d', $hour, $min);
 }
 
 sub stringify_git_time {
