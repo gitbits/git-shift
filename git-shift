@@ -169,8 +169,11 @@ sub git_shift {
         exit($? >> 8) if $?;
     }
 
+    my $keep_prev_reflog = 1;
+
     for my $rev (@all_revs) {
         my($atime, $atz, $ctime, $ctz) = @{$rev_info{$rev}};
+        my $changed;
         if (exists($revs{$rev})) {
             my($ntime, $ntz) = $function->($atime, $atz);
 
@@ -182,10 +185,16 @@ sub git_shift {
             print "CommitDate: $ctimestr\n";
             print "         => $ntimestr\n";
 
-            git_cherry_pick($rev, $ntime, $ntz, $ntime, $ntz);
-        } else {
-            git_cherry_pick($rev, $atime, $atz, $ctime, $ctz);
+            $atime = $ctime = $ntime;
+            $atz   = $ctz   = $ntz;
+            $changed = 1;
         }
+
+        git_cherry_pick($rev, $atime, $atz, $ctime, $ctz);
+
+        delete_prev_reflog() unless $keep_prev_reflog;
+
+        $keep_prev_reflog = $changed;
     }
 }
 
@@ -211,6 +220,14 @@ sub git_cherry_pick {
     system 'git', 'commit', '--amend',
         "--date=$atime $atz", '-C', $rev;
     exit($? >> 8) if $?;
+
+    delete_prev_reflog();
+}
+
+sub delete_prev_reflog {
+    return if $opt_n;
+
+    system 'git', 'reflog', 'delete', 'HEAD@{1}';
 }
 
 sub expand_revspec {
