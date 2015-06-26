@@ -208,6 +208,21 @@ sub git_revlist {
     @out;
 }
 
+sub git_revparse {
+    my($revspec) = @_;
+    my $git = open3(my $in, my $out, '>&2',
+                    'git', 'rev-parse', $revspec) or die $!;
+    my($rev, @rest) = <$out>;
+    waitpid $git, 0;
+    exit($? >> 8) if $?;
+    if (@rest || $rev !~ /^[0-9a-f]{40}$/) {
+        print STDERR "$0: $revspec does not specify a valid commit.\n";
+        exit 64;
+    }
+    chomp($rev);
+    $rev;
+}
+
 sub git_cherry_pick {
     my($rev, $atime, $atz, $ctime, $ctz) = @_;
 
@@ -248,17 +263,9 @@ sub expand_revspec {
                                    sprintf('%s^..%s', $from_spec, $to_spec));
     }
 
-    my $git = open3(my $in, my $out, '>&2',
-                    'git', 'rev-parse', $revspec) or die $!;
-    my($rev, @rest) = <$out>;
-    waitpid $git, 0;
-    exit($? >> 8) if $?;
-    if (@rest || $rev !~ /^[0-9a-f]{40}$/) {
-        print STDERR "$0: $revspec does not specify a valid commit.\n";
-        exit 64;
-    }
-    chomp($rev);
-    ($rev);
+    my @revs = (git_revparse($revspec));
+
+    return @revs;
 }
 
 my $re_epoch	= qr/(?:0|[1-9][0-9]*)/;
