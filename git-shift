@@ -258,9 +258,11 @@ sub expand_revspec {
         if ($to_spec eq '') {
             $to_spec = 'HEAD';
         }
-        return git_revlist($from_spec eq '' ?
-                               $to_spec :
-                                   sprintf('%s^..%s', $from_spec, $to_spec));
+        my @revs = git_revlist($from_spec eq '' ?
+                                   $to_spec :
+                                   sprintf('%s..%s', $from_spec, $to_spec));
+        push @revs, git_revparse($from_spec) unless $from_spec eq '';
+        return @revs;
     }
 
     my @revs = (git_revparse($revspec));
