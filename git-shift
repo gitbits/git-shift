@@ -71,9 +71,10 @@ usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list
                             - number of seconds since the Unix epoch
 
     <rev-list>            speficy commits to modify which must be on the
-                          current branch; a single commit <committish> or
-                          a range of commits <committish1>..<committish2>
-                          (*both inclusive*)
+                          current branch; a single commit or a range of
+                          commits: <committish1>..<committish2> denotes a
+                          *closed* range, and <committish1>...<committish2>
+                          denotes a *left-open* range
 EOS
 }
 
@@ -249,19 +250,15 @@ sub expand_revspec {
     my($revspec, $branch) = @_;
     @_ == 1 or die;
 
-    if ($revspec =~ /\.\.\./) {
-        print STDERR "$0: `...' is not supported.\n";
-        exit 64;
-    }
-    if ($revspec =~ /\.\./) {
-        my($from_spec, $to_spec) = split(/\.\./, $revspec, 2);
+    if ($revspec =~ /\.\.(\.)?/) {
+        my($from_spec, $to_spec, $exclude_from) = ($`, $', $1);
         if ($to_spec eq '') {
             $to_spec = 'HEAD';
         }
         my @revs = git_revlist($from_spec eq '' ?
                                    $to_spec :
                                    sprintf('%s..%s', $from_spec, $to_spec));
-        push @revs, git_revparse($from_spec) unless $from_spec eq '';
+        push @revs, git_revparse($from_spec) unless $from_spec eq '' || $exclude_from;
         return @revs;
     }
 
