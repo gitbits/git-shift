@@ -115,15 +115,6 @@ sub may_exit {
 sub git_shift {
     my($function, @revspec) = @_;
 
-    if (`git diff --shortstat` =~ /\w/) {
-        print STDERR "$0: work directory is not clean.\n";
-        exit 1;
-    }
-    if (`git diff --shortstat --cached` =~ /\w/) {
-        print STDERR "$0: index is not clean.\n";
-        exit 1;
-    }
-
     my %revs = map { ($_ => 0) } map { expand_revspec($_) } @revspec;
 
     if (!%revs) {
@@ -140,19 +131,11 @@ sub git_shift {
         my($rev, @rev_info) = split(' ', $line);
         if (exists($revs{$rev})) {
             $revs{$rev}++;
-            $found ||= do {
-                if (!$start) {
-                    print STDERR "$0: cannot modify the root commit.\n";
-                    exit 1;
-                }
-                1;
-            };
+            $found = 1;
         }
         if ($found) {
             push @all_revs, $rev;
             $rev_info{$rev} = \@rev_info;
-        } else {
-            $start = $rev
         }
     }
     waitpid $git, 0;
@@ -165,12 +148,7 @@ sub git_shift {
         }
     }
 
-    unless ($opt_n) {
-        system 'git', 'reset', '--hard', $start;
-        exit($? >> 8) if $?;
-    }
-
-    my $keep_prev_reflog = 1;
+    my (%commit_map, $last_rev);
 
     for my $rev (@all_revs) {
         my($atime, $atz, $ctime, $ctz) = @{$rev_info{$rev}};
@@ -191,11 +169,12 @@ sub git_shift {
             $changed = 1;
         }
 
-        git_cherry_pick($rev, $atime, $atz, $ctime, $ctz);
+        $last_rev = git_rewrite_commit($rev, $atime, $atz, $ctime, $ctz, \%commit_map);
+    }
 
-        delete_prev_reflog() unless $keep_prev_reflog;
-
-        $keep_prev_reflog = $changed;
+    unless ($opt_n) {
+        system 'git', 'reset', '--soft', $last_rev;
+        exit($? >> 8) if $?;
     }
 }
 
@@ -224,26 +203,46 @@ sub git_revparse {
     $rev;
 }
 
-sub git_cherry_pick {
-    my($rev, $atime, $atz, $ctime, $ctz) = @_;
+sub git_rewrite_commit {
+    my($rev, $atime, $atz, $ctime, $ctz, $commit_map) = @_;
 
     return if $opt_n;
 
-    system "git cherry-pick $rev >/dev/null";
+    my $git_log = open3(my $in1, my $out1, '>&2',
+                    'git', 'log', $rev . '^!', '--pretty=format:%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B') or die $!;
+    my $log_output = do { local $/; <$out1> };
+    waitpid $git_log, 0;
     exit($? >> 8) if $?;
+
+    my ($parents, $author_name, $author_email, $committer_name, $committer_email, $message) = split(/\000/, $log_output);
+
+    my @parent_revs = split(' ', $parents);
+    my @parent_opts;
+    for (@parent_revs) {
+        push @parent_opts, '-p';
+        if (defined (my $new_parent = $commit_map->{$_})) {
+            push @parent_opts, $new_parent;
+        } else {
+            push @parent_opts, $_;
+        }
+    }
 
     local $ENV{GIT_COMMITTER_DATE} = "$ctime $ctz";
-    system 'git', 'commit', '--amend',
-        "--date=$atime $atz", '-C', $rev;
+    local $ENV{GIT_AUTHOR_DATE} = "$atime $atz";
+    local $ENV{GIT_COMMITTER_NAME} = $committer_name;
+    local $ENV{GIT_AUTHOR_NAME} = $author_name;
+    local $ENV{GIT_COMMITTER_EMAIL} = $committer_email;
+    local $ENV{GIT_AUTHOR_EMAIL} = $author_email;
+    my $git_commit_tree = open3(my $in2, my $out2, '>&2',
+                    'git', 'commit-tree', @parent_opts, '-m', $message, $rev . '^{tree}') or die $!;
+    my $new_rev = do { local $/; <$out2> };
+    chomp $new_rev;
+    waitpid $git_commit_tree, 0;
     exit($? >> 8) if $?;
 
-    delete_prev_reflog();
-}
+    $commit_map->{$rev} = $new_rev;
 
-sub delete_prev_reflog {
-    return if $opt_n;
-
-    system 'git', 'reflog', 'delete', 'HEAD@{1}';
+    return $new_rev;
 }
 
 sub expand_revspec {
