@@ -67,7 +67,9 @@ usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list
     <datetime>            set this date time as commit time(s)
                           one of:
                             - ISO-8601 date time string
+                            - RFC 2822 date time format
                             - date(1) format in C locale
+                            - Git's pretty format
                             - number of seconds since the Unix epoch
 
     <rev-list>            speficy commits to modify which must be on the
@@ -325,21 +327,45 @@ sub parse_date {
         return ($time, $tzoffset) unless $@;
     };
 
-    if ($datetime =~ /\A([A-Z][a-z]+\s+[A-Z][a-z]+\s+[0-9]{1,2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s+(?:UTC|GMT|([A-Z]+))\s+([0-9]+)\z/) {
-        my($date, $tzname, $year) = ($1, $2, $3);
+    if ($datetime =~ qr{
+      \A(?:
+        # date(1) format in C locale
+        (?<w>[A-Z][a-z]+) \s+ (?<m>[A-Z][a-z]+) \s+ (?<d>[0-9]{1,2}) \s+
+        (?<T>[0-9]{2}:[0-9]{2}:[0-9]{2}) \s+
+        (?:UTC|GMT|(?<z>[A-Z]+)) \s+
+        (?<Y>[0-9]{4,})
+        |
+        # RFC 2822
+        (?<w>[A-Z][a-z]+) , \s+ (?<d>[0-9]{1,2}) \s+ (?<m>[A-Z][a-z]+) \s+
+        (?<Y>[0-9]{2,}) \s+
+        (?<T>[0-9]{2}:[0-9]{2}:[0-9]{2}) \s+
+        (?:UTC|GMT|(?<z>[A-Z]+|[-+][0-9]{2}:?[0-9]{2}))
+        |
+        # Git's pretty format
+        (?<w>[A-Z][a-z]+) \s+ (?<m>[A-Z][a-z]+) \s+ (?<d>[0-9]{1,2}) \s+
+        (?<T>[0-9]{2}:[0-9]{2}:[0-9]{2}) \s+
+        (?<Y>[0-9]{4,}) \s+
+        (?:UTC|GMT|(?<z>[-+][0-9]{4}))
+      )\z
+    }x) {
+        my($year, $mon, $day, $wday, $time, $tzname) = @+{qw(Y m d w T z)};
+        warn("$wday $mon $day $time $year $tzname");
         eval {
-            my @localtzname = grep { !/\A(UTC|GMT|WILDABBR)\z/ } do {
-                POSIX::tzset();
-                POSIX::tzname();
-            };
-            $time = Time::Piece->strptime("$date $year", '%a %b %d %T %Y');
+            $time = Time::Piece->strptime("$wday $mon $day $time $year", '%a %b %d %T %Y');
             if (defined($tzname)) {
-                grep { $_ eq $tzname } @localtzname or die 'unrecognized time zone name';
-                $time = localtime(
-                    timelocal($time->sec, $time->min, $time->hour,
-                              $time->mday, $time->_mon, $time->year)
-                );
-                $tzoffset = $time->tzoffset;
+                if ($tzname =~ /\A[-+]/) {
+                    $tzname =~ s/://;
+                    $time = Time::Piece->strptime($time->strftime('%Y-%m-%dT%T') . $tzname, '%Y-%m-%dT%T%z');
+                    $tzoffset = parse_tz($tzname);
+                } elsif (grep { $_ eq $tzname } do { POSIX::tzset(); POSIX::tzname() }) {
+                    $time = localtime(
+                        timelocal($time->sec, $time->min, $time->hour,
+                                  $time->mday, $time->_mon, $time->year)
+                    );
+                    $tzoffset = $time->tzoffset;
+                } else {
+                    die 'unrecognized time zone name';
+                }
             } else {
                 $tzoffset = 0;
             }
