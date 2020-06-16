@@ -348,7 +348,6 @@ sub parse_date {
       )\z
     }x) {
         my($year, $mon, $day, $wday, $time, $tzname) = @+{qw(Y m d w T z)};
-        warn("$wday $mon $day $time $year $tzname");
         eval {
             $time = Time::Piece->strptime("$wday $mon $day $time $year", '%a %b %d %T %Y');
             if (defined($tzname)) {
