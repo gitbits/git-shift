@@ -35,6 +35,10 @@ How to use
                                   e.g.
                                     +1d -12h 30m -1h30m -600s
 
+            now[<timediff>]       now, or now plus <timediff>
+                                  e.g.
+                                    now now+1d now-1h30m
+
             <timezone>            in regexp: /^[-+][01][0-9][0-5][0-9]$/
 
             <datetime>            set this date time as commit time(s)
