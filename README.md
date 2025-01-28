@@ -56,7 +56,7 @@ How to use
 Author
 ------
 
-Copyright (c) 2010-2015 Akinori MUSHA.
+Copyright (c) 2010-2025 Akinori MUSHA.
 
 Licensed under the 2-clause BSD license.  See `LICENSE.txt` for
 further details.
