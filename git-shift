@@ -2,7 +2,7 @@
 #
 # git-shift - shifts timestamps of commits after the fact
 #
-# Copyright (c) 2010-2025 Akinori MUSHA
+# Copyright (c) 2010-2026 Akinori MUSHA
 #
 # All rights reserved.
 #
@@ -44,19 +44,21 @@ my $exit_status = 0;
 
 sub usage {
     print STDERR <<'EOS';
-usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list>...
+usage: git shift [options] {[<time>][{ad|cd|now}][<timediff>][<timezone>]|<datetime>} <rev-list>...
 
     -v, --verbose         be verbose
     -n, --dry-run         dry run
     -k                    skip errors
 
-    <timediff>            add this time span to current commit time(s)
+    {ad|cd|now}           select the base date (default: ad)
+                            ad    author date
+                            cd    commit date
+                            now   current time
+
+    <timediff>            add this time span to the base date
                           in regexp: /^[-+]([0-9]+[wdhms])+$/
                           e.g.
-                            +1d -12h 30m -1h30m -600s
-
-    now[<timediff>]       now, or now plus <timediff>
-                          e.g.
+                            +1d -12h 30m -1h30m -600s cd+1d
                             now now+1d now-1h30m
 
     <time>                substitute this value for the time part(s) of
@@ -160,7 +162,7 @@ sub git_shift {
         my($atime, $atz, $ctime, $ctz) = @{$rev_info{$rev}};
         my $changed;
         if (exists($revs{$rev})) {
-            my($ntime, $ntz) = $function->($atime, $atz);
+            my($ntime, $ntz) = $function->($atime, $atz, $ctime, $ctz);
 
             my($atimestr, $ctimestr, $ntimestr) = map {
                 stringify_git_time(@$_);
@@ -284,12 +286,17 @@ sub parse_timespec {
             my($otime, $otz) = @_;
             ($ntime, defined($ntz) ? $ntz : $otz);
         };
-    } elsif ($timespec =~ /\A(?=.)(([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?)?(now|today)?($re_span)?($re_tz)?\z/o) {
-        my($hhmmss, $hh, $mm, $ss, $now, $span, $ntz) = ($1, $2, $3, $4, $5, $6);
+    } elsif ($timespec =~ /\A(?=.)(([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?)?(now|today|ad|cd)?($re_span)?($re_tz)?\z/o) {
+        my($hhmmss, $hh, $mm, $ss, $base, $span, $ntz) = ($1, $2, $3, $4, $5, $6, $7);
         return sub {
-            my($otime, $otz) = @_;
-            if (defined($now)) {
-                $otime = time();
+            my($otime, $otz, $octime, $octz) = @_;
+            if (defined($base)) {
+                if ($base eq 'now' || $base eq 'today') {
+                    $otime = time();
+                } elsif ($base eq 'cd') {
+                    $otime = $octime;
+                    $otz = $octz;
+                }
             }
             if (defined($span) && defined(my $seconds = parse_timediff($span))) {
                 $otime += $seconds;

@@ -18,7 +18,7 @@ Requirements
 How to use
 ----------
 
-        usage: git shift [options] {[<time>][<timediff>][timezone]|<datetime>} <rev-list>...
+        usage: git shift [options] {[<time>][{ad|cd|now}][<timediff>][<timezone>]|<datetime>} <rev-list>...
 
             -v, --verbose         be verbose
             -n, --dry-run         dry run
@@ -30,13 +30,15 @@ How to use
                                     - "HH:MM:SS"
                                     - "HH:MM" (= "HH:MM:00")
 
-            <timediff>            add this time span to current commit time(s)
+            {ad|cd|now}           select the base date (default: ad)
+                                    ad    author date
+                                    cd    commit date
+                                    now   current time
+
+            <timediff>            add this time span to the base date
                                   in regexp: /^[-+]([0-9]+[wdhms])+$/
                                   e.g.
-                                    +1d -12h 30m -1h30m -600s
-
-            now[<timediff>]       now, or now plus <timediff>
-                                  e.g.
+                                    +1d -12h 30m -1h30m -600s cd+1d
                                     now now+1d now-1h30m
 
             <timezone>            in regexp: /^[-+][01][0-9][0-5][0-9]$/
@@ -56,7 +58,7 @@ How to use
 Author
 ------
 
-Copyright (c) 2010-2025 Akinori MUSHA.
+Copyright (c) 2010-2026 Akinori MUSHA.
 
 Licensed under the 2-clause BSD license.  See `LICENSE.txt` for
 further details.
