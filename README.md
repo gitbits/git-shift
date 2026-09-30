@@ -15,6 +15,18 @@ Requirements
 
     Only Perl >= 5.14 comes with a reasonably new version.
 
+Installation
+------------
+
+Install with [mise](https://mise.jdx.dev/):
+
+```sh
+mise use -g github:gitbits/git-shift@latest
+```
+
+Alternatively, put `git-shift` somewhere on your `PATH`.
+Git then also accepts it as `git shift`.
+
 How to use
 ----------
 
